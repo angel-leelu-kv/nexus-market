@@ -1,0 +1,18 @@
+# AI Marketplace Python Dependencies
+
+# Google GenAI SDK (Gemini)
+google-genai>=1.0.0
+
+# Netra Evaluation SDK
+netra-sdk>=0.1.0
+
+# HTTP client (for evaluation pipeline)
+requests>=2.31.0
+httpx>=0.27.0
+
+# FastAPI Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Environment
+python-dotenv>=1.0.0

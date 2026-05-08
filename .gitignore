@@ -1,0 +1,10 @@
+get-pip.py
+.env
+venv/
+node_modules/
+__pycache__/
+.pytest_cache/
+trace_logs/
+*.pyc
+.DS_Store
+.vscode/
