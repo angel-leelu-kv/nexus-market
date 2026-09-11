@@ -1364,9 +1364,7 @@ def marketplace_agent(
     """Main AI Agent with tool calling and optional conversation history."""
     session_id = (context or {}).get("session_id") or str(uuid.uuid4())
     prompt_variant = os.environ.get("AGENT_PROMPT_VARIANT", "default")
-    # system_prompt = get_system_prompt(prompt_variant)
-    result = Netra.prompts.get_prompt(name="PROMPT_DEFAULT").get("messages")
-    system_prompt = result[0].get("content")
+    system_prompt = get_system_prompt(prompt_variant)
 
     # Build messages: system + previous conversation + current user message
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
