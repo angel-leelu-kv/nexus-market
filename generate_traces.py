@@ -13,6 +13,7 @@ Usage examples:
     python generate_traces.py --profile balanced --intent search_services:15
     python generate_traces.py --list-intents
     python generate_traces.py --list-profiles
+    python generate_traces.py --offline --samples 5   # save traces, no LLM/API calls
 """
 
 import argparse
@@ -889,6 +890,7 @@ class TraceConfig:
     profile_name: str | None = None
     max_turns: int = 3
     template_mode: bool = False
+    offline_mode: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1202,6 +1204,31 @@ def _template_followup_message(
 
 
 # ---------------------------------------------------------------------------
+# Offline / mock agent replies (zero LLM and no backend)
+# ---------------------------------------------------------------------------
+
+_MOCK_AGENT_TURN1 = [
+    "I found several listings that may fit. Highlights: listing-001, listing-002, and listing-003. "
+    "Tell me which ID you want details on, or I can compare them.",
+    "Here are some options from the marketplace — listing-004 and listing-005 look like strong matches. "
+    "Want me to open one or add any to your shortlist?",
+    "I pulled a few relevant services (listing-006, listing-007). I can share pricing, reviews, or next steps.",
+]
+
+_MOCK_AGENT_FOLLOWUP = [
+    "listing-001 is $2,500 with strong reviews; delivery is about two weeks. "
+    "I can compare it with listing-002 or add it to your shortlist.",
+    "Sure — I can get more details, compare two listings, or help you send an inquiry to the seller.",
+    "Got it. Let me know if you want pricing, timeline, or help hiring from your shortlist.",
+]
+
+
+def _mock_agent_response(turn_number: int, rng: random.Random) -> str:
+    pool = _MOCK_AGENT_TURN1 if turn_number <= 1 else _MOCK_AGENT_FOLLOWUP
+    return rng.choice(pool)
+
+
+# ---------------------------------------------------------------------------
 # Backend communication
 # ---------------------------------------------------------------------------
 
@@ -1250,7 +1277,7 @@ async def _send_to_agent(
 # ---------------------------------------------------------------------------
 
 async def _run_single_trace(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient | None,
     config: TraceConfig,
     intent: str,
     persona_key: str,
@@ -1269,10 +1296,13 @@ async def _run_single_trace(
     phrasing_axis = PHRASING_AXES[sample_index % len(PHRASING_AXES)]
 
     # -- Turn 1: initial user message --
-    mode_label = "template" if config.template_mode else "llm"
+    if config.offline_mode:
+        mode_label = "offline"
+    else:
+        mode_label = "template" if config.template_mode else "llm"
     print(f"  {tag} Turn 1/{max_turns} — generating message ({mode_label}, persona={persona_key})...")
 
-    if config.template_mode:
+    if config.offline_mode or config.template_mode:
         user_message = _template_user_message(intent, persona_key, sample_index, rng)
     else:
         user_message = await _generate_user_message(
@@ -1288,16 +1318,21 @@ async def _run_single_trace(
         )
     print(f"  {tag} User: {user_message}")
 
-    ok, session_id, agent_response = await _send_to_agent(
-        client=client,
-        base_url=config.base_url,
-        timeout=config.timeout,
-        session_id=session_id,
-        message=user_message,
-    )
+    if config.offline_mode:
+        ok = True
+        agent_response = _mock_agent_response(1, rng)
+    else:
+        ok, session_id, agent_response = await _send_to_agent(
+            client=client,
+            base_url=config.base_url,
+            timeout=config.timeout,
+            session_id=session_id,
+            message=user_message,
+        )
 
     preview = agent_response[:120] + ("..." if len(agent_response) > 120 else "")
-    print(f"  {tag} Agent: {preview}")
+    agent_label = "Mock" if config.offline_mode else "Agent"
+    print(f"  {tag} {agent_label}: {preview}")
 
     turns: list[dict[str, str]] = [
         {"role": "user", "content": user_message},
@@ -1320,7 +1355,7 @@ async def _run_single_trace(
     for turn_num in range(2, max_turns + 1):
         print(f"  {tag} Turn {turn_num}/{max_turns} — generating follow-up ({mode_label})...")
 
-        if config.template_mode:
+        if config.offline_mode or config.template_mode:
             followup = _template_followup_message(turn_num, rng)
         else:
             followup = await _generate_followup_message(
@@ -1332,16 +1367,20 @@ async def _run_single_trace(
             )
         print(f"  {tag} User: {followup}")
 
-        ok, session_id, agent_response = await _send_to_agent(
-            client=client,
-            base_url=config.base_url,
-            timeout=config.timeout,
-            session_id=session_id,
-            message=followup,
-        )
+        if config.offline_mode:
+            ok = True
+            agent_response = _mock_agent_response(turn_num, rng)
+        else:
+            ok, session_id, agent_response = await _send_to_agent(
+                client=client,
+                base_url=config.base_url,
+                timeout=config.timeout,
+                session_id=session_id,
+                message=followup,
+            )
 
         preview = agent_response[:120] + ("..." if len(agent_response) > 120 else "")
-        print(f"  {tag} Agent: {preview}")
+        print(f"  {tag} {agent_label}: {preview}")
 
         turns.append({"role": "user", "content": followup})
         turns.append({"role": "assistant", "content": agent_response})
@@ -1392,22 +1431,30 @@ async def run_traces(config: TraceConfig) -> dict[str, Any]:
 
     traces: list[dict[str, Any]] = []
 
-    async with httpx.AsyncClient() as client:
+    async def _run_all(client: httpx.AsyncClient | None) -> list[dict[str, Any]]:
         if config.sequential:
+            out: list[dict[str, Any]] = []
             for i, (intent, persona, sample_idx, total_samples) in enumerate(work_items):
                 print(f"\n[{i + 1}/{total}] Intent: {intent}")
-                trace = await _run_single_trace(
-                    client, config, intent, persona, sample_idx, total_samples, rng,
+                out.append(
+                    await _run_single_trace(
+                        client, config, intent, persona, sample_idx, total_samples, rng,
+                    )
                 )
-                traces.append(trace)
-        else:
-            tasks = [
-                _run_single_trace(
-                    client, config, intent, persona, sample_idx, total_samples, rng,
-                )
-                for intent, persona, sample_idx, total_samples in work_items
-            ]
-            traces = list(await asyncio.gather(*tasks))
+            return out
+        tasks = [
+            _run_single_trace(
+                client, config, intent, persona, sample_idx, total_samples, rng,
+            )
+            for intent, persona, sample_idx, total_samples in work_items
+        ]
+        return list(await asyncio.gather(*tasks))
+
+    if config.offline_mode:
+        traces = await _run_all(None)
+    else:
+        async with httpx.AsyncClient() as client:
+            traces = await _run_all(client)
 
     result = {
         "metadata": {
@@ -1419,6 +1466,8 @@ async def run_traces(config: TraceConfig) -> dict[str, Any]:
             "base_url": config.base_url,
             "thread_prefix": config.thread_prefix,
             "max_turns": config.max_turns,
+            "offline": config.offline_mode,
+            "template": config.template_mode or config.offline_mode,
         },
         "traces": traces,
     }
@@ -1560,6 +1609,7 @@ examples:
   %(prog)s --intent search_services:10 compare_listings:8
   %(prog)s --list-intents                          # show available intents
   %(prog)s --list-profiles                         # show available profiles
+  %(prog)s --offline --samples 5                    # save JSON only, no LLM/API
 """,
     )
 
@@ -1610,6 +1660,11 @@ examples:
         "--template", action="store_true",
         help="Use pre-written templates instead of LLM for user messages (zero generation cost)",
     )
+    exec_group.add_argument(
+        "--offline", action="store_true",
+        help="Save traces locally with template user messages and mock agent replies; "
+        "no Gemini calls and no backend required",
+    )
 
     info_group = parser.add_argument_group("info")
     info_group.add_argument(
@@ -1648,6 +1703,9 @@ examples:
     if not intent_counts:
         parser.error("No intents to generate. Use --profile, --samples, or --intent.")
 
+    offline = args.offline
+    template_mode = args.template or offline
+
     config = TraceConfig(
         base_url=args.base_url,
         timeout=args.timeout,
@@ -1658,17 +1716,27 @@ examples:
         prompt=args.prompt,
         profile_name=profile_name,
         max_turns=max(1, args.turns),
-        template_mode=args.template,
+        template_mode=template_mode,
+        offline_mode=offline,
     )
 
     total_traces = sum(intent_counts.values())
     print("NexusMarket Trace Generator")
-    print(f"  Backend:      {config.base_url}")
+    if config.offline_mode:
+        print("  Backend:      (skipped — offline mode)")
+    else:
+        print(f"  Backend:      {config.base_url}")
     print(f"  Profile:      {profile_name or 'custom'}")
     print(f"  Intents:      {len(intent_counts)}")
     print(f"  Total traces: {total_traces}")
     print(f"  Turns/trace:  {config.max_turns}")
-    print(f"  Mode:         {'template (no LLM cost)' if config.template_mode else 'llm-generated'}")
+    if config.offline_mode:
+        mode = "offline (no LLM, no API)"
+    elif config.template_mode:
+        mode = "template (no trace-gen LLM)"
+    else:
+        mode = "llm-generated"
+    print(f"  Mode:         {mode}")
     print(f"  Seed:         {config.seed or 'random'}")
     print(f"  Parallel:     {not config.sequential}")
     print(f"  Prefix:       {config.thread_prefix}")

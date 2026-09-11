@@ -39,7 +39,7 @@ from netra.decorators import agent
 from netra.instrumentation.instruments import InstrumentSet
 from netra.session_manager import SessionManager
 from typing import Dict, Any, List, Optional
-
+import logging
 from pydantic import BaseModel
 from opentelemetry import trace
 
@@ -52,6 +52,13 @@ try:
 except ImportError:
     from prompt_variants import get_system_prompt  # when run as python server/app.py from server/
 
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s - %(message)s"))
+    logger.addHandler(_handler)
 SESSION_ID = str(uuid.uuid4())
 Netra.set_session_id(SESSION_ID)
 
@@ -63,7 +70,11 @@ Netra.init(
     disable_batch=True,
     environment="dev",
     headers=headers,
-    debug_mode=True
+    debug_mode=True,
+    root_instruments={InstrumentSet.ALL},
+    instruments={InstrumentSet.ALL}
+    # block_instruments={InstrumentSet.ALL,InstrumentSet.FASTAPI},
+
 )
 
 
@@ -1353,7 +1364,9 @@ def marketplace_agent(
     """Main AI Agent with tool calling and optional conversation history."""
     session_id = (context or {}).get("session_id") or str(uuid.uuid4())
     prompt_variant = os.environ.get("AGENT_PROMPT_VARIANT", "default")
-    system_prompt = get_system_prompt(prompt_variant)
+    # system_prompt = get_system_prompt(prompt_variant)
+    result = Netra.prompts.get_prompt(name="PROMPT_DEFAULT").get("messages")
+    system_prompt = result[0].get("content")
 
     # Build messages: system + previous conversation + current user message
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
@@ -1431,6 +1444,9 @@ def marketplace_agent(
 
         final_response = (response.text or final_response) if response else final_response
         break
+
+    Netra.set_root_input(str(query))
+    Netra.set_root_output(str(final_response))
 
     # Add tools_used as a span attribute so it appears in Netra metadata
     # Try multiple methods to get the current span
@@ -1644,7 +1660,7 @@ def agent_endpoint(request_data: AgentRequest):
     context["session_id"] = session_id
 
     try:
-        print(f"\n📨 Agent query: {user_text} (session_id={session_id})")
+        print(f"\n📨 Agent query: {user_text} (session_id={session_id}) " + f"Trace ID: {Netra.get_trace_id()}")
         result = marketplace_agent(
             user_text,
             context=context,
@@ -1665,6 +1681,9 @@ def agent_endpoint(request_data: AgentRequest):
 def chat_endpoint(request_data: ChatRequest):
     if not request_data.message:
         raise HTTPException(status_code=400, detail="Message required")
+    
+    trace_id = Netra.get_trace_id()
+    print(f"🔗 Trace ID: {trace_id}")
     
     session_id = request_data.session_id or str(uuid.uuid4())
     Netra.set_session_id(session_id)
@@ -1688,6 +1707,7 @@ def chat_endpoint(request_data: ChatRequest):
                     previous_messages + _messages_to_store(new_messages)
                 )[-MAX_HISTORY_MESSAGES:]
             result["session_id"] = session_id
+            result["trace_id"] = Netra.get_trace_id()
             return result
         else:
             # Simple chat: use history for context
@@ -1707,9 +1727,12 @@ def chat_endpoint(request_data: ChatRequest):
                     max_output_tokens=65536,
                 ),
             )
+            print("--------------------------------")
             print(f"🔍 Chat response: {response}")
+            print("--------------------------------")
             assistant_content = response.text or ""
             print(f"🔍 Assistant content: {assistant_content}")
+            print("--------------------------------")
             # Persist this turn for memory
             new_messages = [
                 {"role": "user", "content": request_data.message},
@@ -1722,6 +1745,7 @@ def chat_endpoint(request_data: ChatRequest):
                 "response": assistant_content,
                 "session_id": session_id,
                 "ai_powered": True,
+                "trace_id": Netra.get_trace_id(),
             }
     except Exception as e:
         print(f"❌ Chat error: {e}")

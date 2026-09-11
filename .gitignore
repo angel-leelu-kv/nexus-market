@@ -8,3 +8,5 @@ trace_logs/
 *.pyc
 .DS_Store
 .vscode/
+.venv/
+.agents/

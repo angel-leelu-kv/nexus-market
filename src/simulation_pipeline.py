@@ -13,7 +13,7 @@ load_dotenv()
 
 
 # Dataset ID for AI Marketplace simulations
-DATASET_ID = "3985332b-470a-4c9a-8f39-af933157c277"
+DATASET_ID = "b3bf21e1-623d-4cb8-84dc-405f2e6207eb"
 
 # Backend URL for the marketplace agent (FastAPI)
 BACKEND_URL = os.getenv("MARKETPLACE_BACKEND_URL", "http://localhost:3001")
@@ -36,7 +36,7 @@ class MarketplaceChatAgent(BaseTask):
         self.backend_url = backend_url.rstrip("/")
         self.timeout_s = timeout_s
 
-    def run(self, message: str, session_id: Optional[str] = None) -> TaskResult:
+    def run(self, message: str, session_id: Optional[str] = None,files=None) -> TaskResult:
         session_id = session_id or str(uuid4())
         payload: Dict[str, object] = {"message": message, "session_id": session_id}
         try:

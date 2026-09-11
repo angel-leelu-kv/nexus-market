@@ -1,0 +1,22 @@
+[project]
+name = "nexus-market"
+version = "0.1.0"
+description = "AI Marketplace - Python backend with AI Agent, evaluation pipelines, and simulation"
+requires-python = ">=3.11"
+dependencies = [
+    "google-genai>=1.0.0",
+    "requests>=2.31.0",
+    "httpx>=0.27.0",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "python-dotenv>=1.0.0",
+    "netra-sdk",
+]
+
+[tool.uv.sources]
+netra-sdk = { path = "/Users/angel/code/Netra/netra-sdk-py", editable = true }
+
+[project.scripts]
+serve = "server.app:main"
+
+

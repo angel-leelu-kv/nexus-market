@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Dataset ID for AI Marketplace evaluations
-DATASET_ID = "d23e3258-19c5-440a-adc6-9588b6c34159"
+DATASET_ID = "e264478d-26f5-42af-9fa9-6dc72b802eb7"
 
 
 def _marketplace_api_headers() -> dict:
@@ -86,7 +86,7 @@ async def main():
 
     # Get dataset
     dataset = Netra.evaluation.get_dataset(dataset_id=DATASET_ID)
-    print(f"✅ Dataset loaded: {DATASET_ID}")
+    # print(f"✅ Dataset loaded: {DATASET_ID}")
 
     # Run evaluation test suite
     result = Netra.evaluation.run_test_suite(
@@ -109,6 +109,12 @@ async def main():
     print("=" * 50)
     print(f"Result: {result}")
 
+    run_id = result["runId"]
+    run_results = Netra.evaluation.get_run_results(run_id)
+    print(f"Run results: {run_results}")
+    return run_id
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    run_id = asyncio.run(main())
+    print(run_id)
